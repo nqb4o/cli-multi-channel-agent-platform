@@ -1,0 +1,147 @@
+# Local-dev compose — Go services + Postgres + Redis + MinIO.
+#
+# All services are Go binaries built via multi-stage Dockerfiles.
+#
+# Usage:
+#   export DAYTONA_API_KEY=<your-key>
+#   docker compose -f infra/docker/docker-compose.dev.yml up
+#
+# Without DAYTONA_API_KEY the orchestrator boots in fake mode (in-memory
+# Daytona client) — useful for local dev without Daytona Cloud.
+
+version: "3.9"
+
+services:
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: agent_platform
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # F13 — Object storage backing the skill registry's blob store.
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # ── Go services ─────────────────────────────────────────────────────────────
+
+  orchestrator:
+    build:
+      context: ../..
+      dockerfile: infra/docker/orchestrator-go.Dockerfile
+    environment:
+      DAYTONA_API_KEY: ${DAYTONA_API_KEY:-}
+      DAYTONA_API_URL: ${DAYTONA_API_URL:-}
+      DAYTONA_TARGET: ${DAYTONA_TARGET:-}
+      SANDBOX_IMAGE: ${SANDBOX_IMAGE:-ubuntu:24.04}
+      ORCHESTRATOR_HOST: 0.0.0.0
+      ORCHESTRATOR_PORT: "8081"
+      AUTO_STOP_INTERVAL_M: "5"
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8081/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: infra/docker/gateway-go.Dockerfile
+    environment:
+      GATEWAY_HTTP_ADDR: 0.0.0.0:8080
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-devtoken}
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_DSN: postgresql://postgres:postgres@postgres:5432/agent_platform
+      DB_ENCRYPTION_KEY: ${DB_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+      ORCHESTRATOR_URL: http://orchestrator:8081
+      USER_JWT_SECRET: ${USER_JWT_SECRET:-demo-only-jwt-secret}
+      BYPASS_LOGIN: ${BYPASS_LOGIN:-0}
+      # Telegram channel adapter — auto-registered when token is set
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      orchestrator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  registry:
+    build:
+      context: ../..
+      dockerfile: infra/docker/registry-go.Dockerfile
+    environment:
+      REGISTRY_HOST: 0.0.0.0
+      REGISTRY_PORT: "8090"
+      REGISTRY_DSN: postgres://postgres:postgres@postgres:5432/agent_platform
+      REGISTRY_BLOB_DIR: /var/registry/blobs
+      REGISTRY_JWT_SECRET: ${REGISTRY_JWT_SECRET:-demo-only-not-a-real-secret}
+      REGISTRY_ALLOWED_PUBLISHERS: ${REGISTRY_ALLOWED_PUBLISHERS:-test-publisher}
+      REGISTRY_VERIFIER: ${REGISTRY_VERIFIER:-inprocess}
+    ports:
+      - "8090:8090"
+    volumes:
+      - registry_blobs:/var/registry/blobs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8090/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pg_data: {}
+  minio_data: {}
+  registry_blobs: {}

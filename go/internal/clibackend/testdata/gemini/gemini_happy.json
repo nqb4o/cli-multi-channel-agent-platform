@@ -1,0 +1,9 @@
+{
+  "response": "hello world",
+  "session_id": "sess-gem-happy-001",
+  "stats": {
+    "input_tokens": 50,
+    "output": 7,
+    "cached": 12
+  }
+}

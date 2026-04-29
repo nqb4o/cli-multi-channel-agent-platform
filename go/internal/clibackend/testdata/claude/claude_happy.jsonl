@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","session_id":"sess-claude-1"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"hello "}]}}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"world"}}}
+{"type":"result","session_id":"sess-claude-1","result":"hello world","usage":{"input_tokens":12,"output_tokens":4,"cache_read_input_tokens":4}}

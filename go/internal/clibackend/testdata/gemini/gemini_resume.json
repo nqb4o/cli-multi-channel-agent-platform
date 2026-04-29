@@ -1,0 +1,9 @@
+{
+  "response": "resumed reply text",
+  "session_id": "prev-sess-42",
+  "usage": {
+    "input_tokens": 30,
+    "output_tokens": 4,
+    "cache_read_input_tokens": 8
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "update_id": 873214501,
+  "message": {
+    "message_id": 4113,
+    "from": {
+      "id": 7741148933,
+      "is_bot": false,
+      "first_name": "Anh"
+    },
+    "chat": {
+      "id": 7741148933,
+      "type": "private",
+      "first_name": "Anh"
+    },
+    "date": 1735000005,
+    "caption": "look at this",
+    "photo": [
+      {
+        "file_id": "AgACAgIAAxkBAAIE-photo-thumb",
+        "file_unique_id": "AQADuniq-thumb",
+        "width": 90,
+        "height": 51,
+        "file_size": 1234
+      },
+      {
+        "file_id": "AgACAgIAAxkBAAIE-photo-largest",
+        "file_unique_id": "AQADuniq-largest",
+        "width": 1280,
+        "height": 720,
+        "file_size": 102400
+      }
+    ]
+  }
+}

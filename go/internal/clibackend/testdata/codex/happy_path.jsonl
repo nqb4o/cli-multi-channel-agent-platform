@@ -1,0 +1,4 @@
+{"type": "session.created", "session_id": "sess-abc-123"}
+{"type": "thread.started", "thread_id": "thr-xyz-789"}
+{"type": "item.completed", "item": {"type": "assistant_message", "text": "hello world"}}
+{"type": "turn.completed", "usage": {"input_tokens": 12, "output_tokens": 4, "input_tokens_details": {"cached_tokens": 4}}}

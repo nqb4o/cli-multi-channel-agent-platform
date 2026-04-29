@@ -1,0 +1,2 @@
+{"type": "session.created", "session_id": "sess-rl-1"}
+{"type": "error", "message": "Weekly usage limit reached (HTTP 429). Try again later."}

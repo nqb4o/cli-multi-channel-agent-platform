@@ -1,0 +1,2 @@
+{"type": "session.created", "session_id": "sess-auth-fail-1"}
+{"type": "error", "message": "Authentication expired. Please run `codex login` to continue."}

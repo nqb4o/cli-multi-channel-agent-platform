@@ -1,0 +1,23 @@
+{
+  "update_id": 873214500,
+  "message": {
+    "message_id": 4112,
+    "from": {
+      "id": 7741148933,
+      "is_bot": false,
+      "first_name": "Anh",
+      "last_name": "Khach",
+      "username": "anhk",
+      "language_code": "vi"
+    },
+    "chat": {
+      "id": 7741148933,
+      "type": "private",
+      "first_name": "Anh",
+      "last_name": "Khach",
+      "username": "anhk"
+    },
+    "date": 1735000000,
+    "text": "/start hello"
+  }
+}

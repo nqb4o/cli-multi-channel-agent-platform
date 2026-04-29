@@ -1,0 +1,21 @@
+{
+  "update_id": 873214502,
+  "message": {
+    "message_id": 4114,
+    "message_thread_id": 17,
+    "is_topic_message": true,
+    "from": {
+      "id": 7741148933,
+      "is_bot": false,
+      "first_name": "Anh"
+    },
+    "chat": {
+      "id": -1001234567890,
+      "type": "supergroup",
+      "title": "Demo Forum",
+      "is_forum": true
+    },
+    "date": 1735000099,
+    "text": "topic message body"
+  }
+}

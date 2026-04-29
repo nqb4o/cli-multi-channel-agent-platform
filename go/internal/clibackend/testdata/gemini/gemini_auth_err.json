@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "UNAUTHENTICATED",
+    "message": "401 Unauthorized: Gemini API key invalid or expired. Please run `gemini auth` to re-authenticate."
+  },
+  "is_error": true
+}

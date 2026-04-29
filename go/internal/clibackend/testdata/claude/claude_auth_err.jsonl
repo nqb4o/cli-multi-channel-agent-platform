@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","session_id":"sess-claude-2"}
+{"type":"error","message":"OAuth token expired — please run `claude login` again"}
