@@ -137,6 +137,10 @@ func NormalizeState(raw string) string {
 
 const defaultDaytonaAPIURL = "https://app.daytona.io/api"
 
+// defaultToolboxProxyURL is the base URL for per-sandbox toolbox operations
+// (exec, file access). The pattern is: <toolboxProxyURL>/<sandboxID>/<op>.
+const defaultToolboxProxyURL = "https://proxy.app.daytona.io/toolbox"
+
 // LiveDaytonaClient is a thin REST client targeting the Daytona public
 // OpenAPI spec.
 //
@@ -144,10 +148,11 @@ const defaultDaytonaAPIURL = "https://app.daytona.io/api"
 // keep the dependency footprint near zero. The shape of each REST payload
 // matches what the Python SDK sends.
 type LiveDaytonaClient struct {
-	apiKey  string
-	apiURL  string
-	target  string
-	http    *http.Client
+	apiKey      string
+	apiURL      string
+	toolboxURL  string
+	target      string
+	http        *http.Client
 }
 
 // NewLiveDaytonaClient constructs a live client. apiKey must be non-empty.
@@ -156,14 +161,15 @@ func NewLiveDaytonaClient(apiKey, apiURL, target string) *LiveDaytonaClient {
 		apiURL = defaultDaytonaAPIURL
 	}
 	return &LiveDaytonaClient{
-		apiKey: apiKey,
-		apiURL: strings.TrimRight(apiURL, "/"),
-		target: target,
-		http:   &http.Client{Timeout: 60 * time.Second},
+		apiKey:     apiKey,
+		apiURL:     strings.TrimRight(apiURL, "/"),
+		toolboxURL: defaultToolboxProxyURL,
+		target:     target,
+		http:       &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
-func (c *LiveDaytonaClient) doJSON(ctx context.Context, method, path string, body any, out any) error {
+func (c *LiveDaytonaClient) doJSONAt(ctx context.Context, baseURL, method, path string, body any, out any) error {
 	var buf io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -172,7 +178,7 @@ func (c *LiveDaytonaClient) doJSON(ctx context.Context, method, path string, bod
 		}
 		buf = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.apiURL+path, buf)
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, buf)
 	if err != nil {
 		return fmt.Errorf("new request: %w", err)
 	}
@@ -201,6 +207,10 @@ func (c *LiveDaytonaClient) doJSON(ctx context.Context, method, path string, bod
 	return nil
 }
 
+func (c *LiveDaytonaClient) doJSON(ctx context.Context, method, path string, body any, out any) error {
+	return c.doJSONAt(ctx, c.apiURL, method, path, body, out)
+}
+
 // liveSandboxJSON is the wire shape we expect for a sandbox object.
 type liveSandboxJSON struct {
 	ID     string            `json:"id"`
@@ -223,26 +233,26 @@ func (j liveSandboxJSON) toRaw() *RawSandbox {
 // CreateSandbox implements DaytonaClient.
 func (c *LiveDaytonaClient) CreateSandbox(ctx context.Context, p CreateSandboxParams) (*RawSandbox, error) {
 	body := map[string]any{
-		"name":     p.Name,
-		"image":    p.Image,
-		"env_vars": p.Env,
-		"labels":   p.Labels,
+		"name":   p.Name,
+		"image":  p.Image,
+		"env":    p.Env,
+		"labels": p.Labels,
 	}
 	if p.AutoStopIntervalM > 0 {
-		body["auto_stop_interval"] = p.AutoStopIntervalM
+		body["autoStopInterval"] = p.AutoStopIntervalM
 	}
 	if len(p.Volumes) > 0 {
 		vs := make([]map[string]string, 0, len(p.Volumes))
 		for _, v := range p.Volumes {
 			vs = append(vs, map[string]string{
-				"volume_id":  v.VolumeID,
-				"mount_path": v.MountPath,
+				"volumeId":  v.VolumeID,
+				"mountPath": v.MountPath,
 			})
 		}
 		body["volumes"] = vs
 	}
 	var out liveSandboxJSON
-	if err := c.doJSON(ctx, http.MethodPost, "/sandboxes", body, &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, "/sandbox", body, &out); err != nil {
 		return nil, err
 	}
 	return out.toRaw(), nil
@@ -251,7 +261,7 @@ func (c *LiveDaytonaClient) CreateSandbox(ctx context.Context, p CreateSandboxPa
 // GetSandbox implements DaytonaClient.
 func (c *LiveDaytonaClient) GetSandbox(ctx context.Context, sandboxID string) (*RawSandbox, error) {
 	var out liveSandboxJSON
-	if err := c.doJSON(ctx, http.MethodGet, "/sandboxes/"+sandboxID, nil, &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodGet, "/sandbox/"+sandboxID, nil, &out); err != nil {
 		return nil, err
 	}
 	return out.toRaw(), nil
@@ -259,15 +269,13 @@ func (c *LiveDaytonaClient) GetSandbox(ctx context.Context, sandboxID string) (*
 
 // FindByLabel implements DaytonaClient.
 func (c *LiveDaytonaClient) FindByLabel(ctx context.Context, key, value string) (*RawSandbox, error) {
-	// Daytona's list endpoint accepts ?labels=key=value query params.
-	q := "/sandboxes?labels=" + key + "%3D" + value
-	var page struct {
-		Items []liveSandboxJSON `json:"items"`
-	}
-	if err := c.doJSON(ctx, http.MethodGet, q, nil, &page); err != nil {
+	// Daytona's list endpoint accepts ?label=key=value query params.
+	q := "/sandbox?label=" + key + "%3D" + value
+	var items []liveSandboxJSON
+	if err := c.doJSON(ctx, http.MethodGet, q, nil, &items); err != nil {
 		return nil, err
 	}
-	for _, item := range page.Items {
+	for _, item := range items {
 		if item.Labels[key] == value {
 			return item.toRaw(), nil
 		}
@@ -277,7 +285,7 @@ func (c *LiveDaytonaClient) FindByLabel(ctx context.Context, key, value string) 
 
 // StartSandbox implements DaytonaClient.
 func (c *LiveDaytonaClient) StartSandbox(ctx context.Context, sandboxID string) (*RawSandbox, error) {
-	if err := c.doJSON(ctx, http.MethodPost, "/sandboxes/"+sandboxID+"/start", nil, nil); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, "/sandbox/"+sandboxID+"/start", nil, nil); err != nil {
 		return nil, err
 	}
 	return c.GetSandbox(ctx, sandboxID)
@@ -285,7 +293,7 @@ func (c *LiveDaytonaClient) StartSandbox(ctx context.Context, sandboxID string) 
 
 // StopSandbox implements DaytonaClient.
 func (c *LiveDaytonaClient) StopSandbox(ctx context.Context, sandboxID string) (*RawSandbox, error) {
-	if err := c.doJSON(ctx, http.MethodPost, "/sandboxes/"+sandboxID+"/stop", nil, nil); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, "/sandbox/"+sandboxID+"/stop", nil, nil); err != nil {
 		return nil, err
 	}
 	return c.GetSandbox(ctx, sandboxID)
@@ -293,16 +301,32 @@ func (c *LiveDaytonaClient) StopSandbox(ctx context.Context, sandboxID string) (
 
 // DeleteSandbox implements DaytonaClient.
 func (c *LiveDaytonaClient) DeleteSandbox(ctx context.Context, sandboxID string) error {
-	return c.doJSON(ctx, http.MethodDelete, "/sandboxes/"+sandboxID, nil, nil)
+	return c.doJSON(ctx, http.MethodDelete, "/sandbox/"+sandboxID, nil, nil)
 }
 
 // GetOrCreateVolume implements DaytonaClient.
+// The Daytona API does not support upsert — it returns 400 if a volume with
+// the same name already exists. We list all volumes and match by name first,
+// falling back to create only when it is truly absent.
 func (c *LiveDaytonaClient) GetOrCreateVolume(ctx context.Context, name string) (string, error) {
-	body := map[string]any{"name": name, "create_if_missing": true}
+	// 1. Try to find an existing volume with this name.
+	var volumes []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/volumes", nil, &volumes); err != nil {
+		return "", fmt.Errorf("list volumes: %w", err)
+	}
+	for _, v := range volumes {
+		if v.Name == name {
+			return v.ID, nil
+		}
+	}
+	// 2. Not found — create it.
 	var out struct {
 		ID string `json:"id"`
 	}
-	if err := c.doJSON(ctx, http.MethodPost, "/volumes", body, &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, "/volumes", map[string]any{"name": name}, &out); err != nil {
 		return "", err
 	}
 	return out.ID, nil
@@ -331,11 +355,12 @@ func (c *LiveDaytonaClient) ExecCommand(ctx context.Context, sandboxID string, c
 	}
 	var out struct {
 		Result   string `json:"result"`
-		ExitCode *int   `json:"exit_code"`
+		ExitCode *int   `json:"exitCode"`
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout+5)*time.Second)
 	defer cancel()
-	err := c.doJSON(reqCtx, http.MethodPost, "/sandboxes/"+sandboxID+"/exec", body, &out)
+	// Exec goes via the toolbox proxy: POST <toolboxURL>/<sandboxID>/process/execute
+	err := c.doJSONAt(reqCtx, c.toolboxURL, http.MethodPost, "/"+sandboxID+"/process/execute", body, &out)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return &RawExecResult{TimedOut: true}, nil
@@ -352,10 +377,8 @@ func (c *LiveDaytonaClient) ExecCommand(ctx context.Context, sandboxID string, c
 func (c *LiveDaytonaClient) Healthz(ctx context.Context) bool {
 	hctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	var page struct {
-		Items []liveSandboxJSON `json:"items"`
-	}
-	err := c.doJSON(hctx, http.MethodGet, "/sandboxes?limit=1", nil, &page)
+	var items []liveSandboxJSON
+	err := c.doJSON(hctx, http.MethodGet, "/sandbox?limit=1", nil, &items)
 	return err == nil
 }
 

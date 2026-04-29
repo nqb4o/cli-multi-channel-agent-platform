@@ -21,7 +21,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: agent_platform
     ports:
-      - "5432:5432"
+      - "5434:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -33,7 +33,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "6381:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
@@ -48,8 +48,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # console
+      - "9002:9000"   # S3 API
+      - "9003:9001"   # console
     volumes:
       - minio_data:/data
     healthcheck:
@@ -73,7 +73,7 @@ services:
       ORCHESTRATOR_PORT: "8081"
       AUTO_STOP_INTERVAL_M: "5"
     ports:
-      - "8081:8081"
+      - "18081:8081"
     depends_on:
       postgres:
         condition: service_healthy
@@ -102,7 +102,7 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
     ports:
-      - "8080:8080"
+      - "18080:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -129,7 +129,7 @@ services:
       REGISTRY_ALLOWED_PUBLISHERS: ${REGISTRY_ALLOWED_PUBLISHERS:-test-publisher}
       REGISTRY_VERIFIER: ${REGISTRY_VERIFIER:-inprocess}
     ports:
-      - "8090:8090"
+      - "18090:8090"
     volumes:
       - registry_blobs:/var/registry/blobs
     depends_on:

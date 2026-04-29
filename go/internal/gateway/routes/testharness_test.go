@@ -109,6 +109,10 @@ func (f *fakeOrchestrator) ProvisionSandbox(_ context.Context, userID string) (*
 	}, nil
 }
 
+func (f *fakeOrchestrator) ExecInSandbox(_ context.Context, _ string, _ []string, _ int) (*gateway.ExecResult, error) {
+	return &gateway.ExecResult{Stdout: "ok", ExitCode: new(int)}, nil
+}
+
 func (f *fakeOrchestrator) Healthz(_ context.Context) bool { return true }
 
 // testEnv bundles the per-test wiring so individual tests can poke at any

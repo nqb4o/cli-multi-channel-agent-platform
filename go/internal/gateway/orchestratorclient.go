@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,9 +20,18 @@ type SandboxView struct {
 	State  string `json:"state"` // provisioning|running|hibernated|destroyed
 }
 
+// ExecResult is the result of a one-shot exec inside a sandbox.
+type ExecResult struct {
+	Stdout   string
+	Stderr   string
+	ExitCode *int
+	TimedOut bool
+}
+
 // OrchestratorClient is the minimal client surface used by gateway admin routes.
 type OrchestratorClient interface {
 	ProvisionSandbox(ctx context.Context, userID string) (*SandboxView, error)
+	ExecInSandbox(ctx context.Context, sandboxID string, cmd []string, timeoutS int) (*ExecResult, error)
 	Healthz(ctx context.Context) bool
 }
 
@@ -48,12 +58,23 @@ type HttpOrchestratorClient struct {
 	client  *http.Client
 }
 
-// NewHttpOrchestratorClient builds a client targeting baseURL. timeout is the
-// per-request timeout (use 0 to disable).
+// NewHttpOrchestratorClient builds a client targeting baseURL. timeout sets the
+// HTTP client-level deadline; use 0 to rely on per-request context cancellation
+// only (preferred for long-running operations like sandbox provisioning).
 func NewHttpOrchestratorClient(baseURL string, timeout time.Duration) *HttpOrchestratorClient {
 	return &HttpOrchestratorClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		client:  &http.Client{Timeout: timeout},
+	}
+}
+
+// NewHttpOrchestratorClientNoTimeout builds a client that relies on context
+// cancellation for timeouts — suitable when callers set their own deadlines
+// and sandbox provisioning may take 30+ seconds.
+func NewHttpOrchestratorClientNoTimeout(baseURL string) *HttpOrchestratorClient {
+	return &HttpOrchestratorClient{
+		baseURL: strings.TrimRight(baseURL, "/"),
+		client:  &http.Client{},
 	}
 }
 
@@ -87,6 +108,60 @@ func (c *HttpOrchestratorClient) ProvisionSandbox(ctx context.Context, userID st
 		return nil, errors.New("orchestrator response missing required fields")
 	}
 	return &view, nil
+}
+
+// ExecInSandbox calls POST /sandboxes/{id}/exec on the orchestrator.
+func (c *HttpOrchestratorClient) ExecInSandbox(ctx context.Context, sandboxID string, cmd []string, timeoutS int) (*ExecResult, error) {
+	if timeoutS <= 0 {
+		timeoutS = 60
+	}
+	body, err := json.Marshal(map[string]any{
+		"cmd":       cmd,
+		"timeout_s": timeoutS,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+	url := c.baseURL + "/sandboxes/" + sandboxID + "/exec"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, &OrchestratorTransportError{Err: err}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, &OrchestratorTransportError{Err: err}
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, &OrchestratorStatusError{StatusCode: resp.StatusCode, Body: string(respBody)}
+	}
+	var out struct {
+		StdoutB64 string `json:"stdout_b64"`
+		StderrB64 string `json:"stderr_b64"`
+		ExitCode  *int   `json:"exit_code"`
+		TimedOut  bool   `json:"timed_out"`
+	}
+	if err := json.Unmarshal(respBody, &out); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	stdout, _ := decodeB64(out.StdoutB64)
+	stderr, _ := decodeB64(out.StderrB64)
+	return &ExecResult{
+		Stdout:   stdout,
+		Stderr:   stderr,
+		ExitCode: out.ExitCode,
+		TimedOut: out.TimedOut,
+	}, nil
+}
+
+func decodeB64(s string) (string, error) {
+	if s == "" {
+		return "", nil
+	}
+	b, err := base64.StdEncoding.DecodeString(s)
+	return string(b), err
 }
 
 // Healthz returns true if the orchestrator's /healthz returns 2xx.

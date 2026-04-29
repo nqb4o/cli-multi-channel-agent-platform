@@ -69,7 +69,7 @@ func NewApp(
 		registry = DefaultChannelRegistry()
 	}
 	if orchestrator == nil {
-		orchestrator = NewHttpOrchestratorClient(cfg.OrchestratorURL, 5*time.Second)
+		orchestrator = NewHttpOrchestratorClientNoTimeout(cfg.OrchestratorURL)
 	}
 	return &App{
 		Config:       cfg,

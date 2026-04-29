@@ -18,6 +18,8 @@
 //	POST  /channels           (channels.go) — bearer JWT
 //	GET   /channels           (channels.go) — bearer JWT
 //	DELETE /channels/{id}     (channels.go) — bearer JWT
+//	POST  /users/me/provider-auth/{provider}         (provider_auth.go) — bearer JWT
+//	GET   /users/me/provider-auth/{provider}/status  (provider_auth.go) — bearer JWT
 package routes
 
 import (
@@ -42,6 +44,7 @@ func NewRouter(app *gateway.App) *chi.Mux {
 	mountAuth(r, app)
 	mountAgents(r, app)
 	mountUserChannels(r, app)
+	mountProviderAuth(r, app)
 
 	return r
 }

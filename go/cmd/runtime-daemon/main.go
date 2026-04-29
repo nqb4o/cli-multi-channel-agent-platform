@@ -60,6 +60,18 @@ func run(args []string, stdin *os.File, stdout *os.File, stderr *os.File) int {
 	slog.SetDefault(logger)
 
 	registry := clibackend.NewBackendRegistry()
+	// Register real CLI backends unconditionally — each will surface an auth
+	// error at run time if the underlying CLI is absent or unauthenticated.
+	for _, b := range []clibackend.CliBackend{
+		clibackend.NewClaudeBackend(),
+		clibackend.NewCodexBackend(),
+		clibackend.NewGeminiBackend(clibackend.GeminiConfig{}),
+	} {
+		if err := registry.Register(b); err != nil {
+			// Non-fatal: continue without this backend.
+			fmt.Fprintf(stderr, "WARNING: register %T: %v\n", b, err)
+		}
+	}
 	if *registerStub {
 		if err := registry.Register(runtime.NewStubBackend()); err != nil {
 			fmt.Fprintf(stderr, "ERROR: register stub backend: %v\n", err)

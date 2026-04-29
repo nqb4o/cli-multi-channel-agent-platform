@@ -194,19 +194,39 @@ func (o *Orchestrator) Create(ctx context.Context, userID string) (*Sandbox, err
 		})
 	}
 
-	// 2. Create the sandbox itself.
+	// 2. Create the sandbox itself. Retry up to 6 times when Daytona reports
+	// a volume is not yet ready (newly created volumes take a few seconds).
 	labels := map[string]string{userLabel: userID}
 	name := fmt.Sprintf("u-%s-%s", userID, shortHex(uuid.NewString(), 6))
-	raw, err := o.client.CreateSandbox(ctx, CreateSandboxParams{
+	params := CreateSandboxParams{
 		Name:              name,
 		Image:             o.image,
 		Labels:            labels,
 		Volumes:           volumeMounts,
 		AutoStopIntervalM: o.autoStopM,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create sandbox: %w", err)
 	}
+	var raw *RawSandbox
+	var createErr error
+	for attempt := 0; attempt < 6; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt*5) * time.Second):
+			}
+		}
+		raw, createErr = o.client.CreateSandbox(ctx, params)
+		if createErr == nil {
+			break
+		}
+		if !strings.Contains(createErr.Error(), "not in a ready state") {
+			return nil, fmt.Errorf("create sandbox: %w", createErr)
+		}
+	}
+	if createErr != nil {
+		return nil, fmt.Errorf("create sandbox: %w", createErr)
+	}
+	_ = raw // used below
 
 	if err := o.store.Upsert(ctx, userID, raw.ID); err != nil {
 		return nil, fmt.Errorf("store upsert: %w", err)

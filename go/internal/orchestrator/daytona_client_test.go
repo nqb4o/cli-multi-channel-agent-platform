@@ -101,7 +101,7 @@ func TestRawVolumeMountFields(t *testing.T) {
 func TestLiveCreateSandbox(t *testing.T) {
 	var captured map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "POST" && r.URL.Path == "/sandboxes" {
+		if r.Method == "POST" && r.URL.Path == "/sandbox" {
 			_ = json.NewDecoder(r.Body).Decode(&captured)
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -136,15 +136,15 @@ func TestLiveCreateSandbox(t *testing.T) {
 	if captured["image"] != "ubuntu:24.04" {
 		t.Errorf("image = %v", captured["image"])
 	}
-	if captured["auto_stop_interval"].(float64) != 5 {
-		t.Errorf("auto_stop_interval = %v", captured["auto_stop_interval"])
+	if captured["autoStopInterval"].(float64) != 5 {
+		t.Errorf("autoStopInterval = %v", captured["autoStopInterval"])
 	}
 	vols, _ := captured["volumes"].([]any)
 	if len(vols) != 1 {
 		t.Fatalf("volumes = %v", vols)
 	}
 	vm := vols[0].(map[string]any)
-	if vm["volume_id"] != "v1" || vm["mount_path"] != "/home/user/.codex" {
+	if vm["volumeId"] != "v1" || vm["mountPath"] != "/home/user/.codex" {
 		t.Errorf("volume mount: %v", vm)
 	}
 }
@@ -175,11 +175,9 @@ func TestLiveGetSandboxNormalizesState(t *testing.T) {
 func TestLiveFindByLabelReturnsFirst(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"items": []map[string]any{
-				{"id": "sb-1", "state": "started", "labels": map[string]string{"platform.user_id": "alice"}},
-				{"id": "sb-2", "state": "started", "labels": map[string]string{"platform.user_id": "bob"}},
-			},
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"id": "sb-1", "state": "started", "labels": map[string]string{"platform.user_id": "alice"}},
+			{"id": "sb-2", "state": "started", "labels": map[string]string{"platform.user_id": "bob"}},
 		})
 	}))
 	defer srv.Close()
@@ -196,7 +194,7 @@ func TestLiveFindByLabelReturnsFirst(t *testing.T) {
 func TestLiveFindByLabelNoneOnEmpty(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{}})
+		_ = json.NewEncoder(w).Encode([]any{})
 	}))
 	defer srv.Close()
 	client := NewLiveDaytonaClient("k", srv.URL, "")
@@ -266,12 +264,13 @@ func TestLiveExecCommand(t *testing.T) {
 		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"result":    "ok\n",
-			"exit_code": 0,
+			"result":   "ok\n",
+			"exitCode": 0,
 		})
 	}))
 	defer srv.Close()
 	client := NewLiveDaytonaClient("k", srv.URL, "")
+	client.toolboxURL = srv.URL // point toolbox at the same test server
 
 	res, err := client.ExecCommand(context.Background(), "sb-1", []string{"echo", "hi there"}, ExecParams{
 		Env:      map[string]string{"X": "1"},
@@ -296,10 +295,11 @@ func TestLiveExecCommandPipesStdin(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
-		_ = json.NewEncoder(w).Encode(map[string]any{"result": "", "exit_code": 0})
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": "", "exitCode": 0})
 	}))
 	defer srv.Close()
 	client := NewLiveDaytonaClient("k", srv.URL, "")
+	client.toolboxURL = srv.URL // point toolbox at the same test server
 
 	_, err := client.ExecCommand(context.Background(), "sb-1",
 		[]string{"python", "-c", "import sys; print(sys.stdin.read())"},
@@ -319,9 +319,17 @@ func TestLiveExecCommandPipesStdin(t *testing.T) {
 	}
 }
 
-func TestLiveGetOrCreateVolume(t *testing.T) {
+func TestLiveGetOrCreateVolumeFindsExisting(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": "vol-1"})
+		if r.Method == http.MethodGet {
+			// list returns one existing volume
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{"id": "vol-1", "name": "u-alice-codex-auth"},
+			})
+			return
+		}
+		// POST should not be called
+		http.Error(w, "unexpected POST", http.StatusBadRequest)
 	}))
 	defer srv.Close()
 	client := NewLiveDaytonaClient("k", srv.URL, "")
@@ -329,14 +337,35 @@ func TestLiveGetOrCreateVolume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(id, "vol-") {
+	if id != "vol-1" {
+		t.Errorf("id = %q", id)
+	}
+}
+
+func TestLiveGetOrCreateVolumeCreatesNew(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			// list returns empty — volume not yet created
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+			return
+		}
+		// POST creates it
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "vol-new"})
+	}))
+	defer srv.Close()
+	client := NewLiveDaytonaClient("k", srv.URL, "")
+	id, err := client.GetOrCreateVolume(context.Background(), "u-alice-new-vol")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "vol-new" {
 		t.Errorf("id = %q", id)
 	}
 }
 
 func TestLiveHealthzOK(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{}})
+		_ = json.NewEncoder(w).Encode([]any{})
 	}))
 	defer srv.Close()
 	client := NewLiveDaytonaClient("k", srv.URL, "")

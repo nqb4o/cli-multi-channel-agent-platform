@@ -5,6 +5,11 @@
 //
 // When TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET are set the Telegram
 // channel adapter is auto-registered at startup.
+//
+// When RUNTIME_DAEMON_BIN is set (or runtime-daemon is on PATH) the built-in
+// AgentRunConsumer is started: it reads from agent:runs, dispatches each job
+// to runtime-daemon over JSON-RPC stdio, and delivers the reply via the
+// matching channel adapter.
 package main
 
 import (
@@ -86,8 +91,32 @@ func run() error {
 	}
 
 	// Trap SIGINT/SIGTERM for graceful shutdown.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	// Start the agent-run consumer if a concrete *redis.Client is available.
+	// The consumer reads from agent:runs, dispatches each job to runtime-daemon
+	// over JSON-RPC stdio, and delivers the reply via the channel adapter.
+	if chanDB, ok := app.ChannelsRepo.(gateway.ChannelsRepoWithListGetDelete); ok {
+		consumer := gateway.NewAgentRunConsumer(
+			rdb,
+			cfg.StreamName,
+			os.Getenv("RUNTIME_DAEMON_BIN"),
+			app.Channels,
+			chanDB,
+			app.AgentsRepo,
+		)
+		go func() {
+			if err := consumer.Run(ctx); err != nil {
+				log.Printf("consumer exited: %v", err)
+			}
+		}()
+	} else {
+		log.Printf("WARNING: ChannelsRepo does not implement ChannelsRepoWithListGetDelete — consumer not started")
+	}
 
 	go func() {
 		log.Printf("gateway listening on %s (stream=%s, group=%s)",
@@ -99,8 +128,9 @@ func run() error {
 
 	<-stop
 	log.Printf("gateway: shutting down")
-	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	cancel() // signal consumer to stop
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutCancel()
 	_ = server.Shutdown(shutCtx)
 	return nil
 }

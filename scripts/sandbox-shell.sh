@@ -20,17 +20,20 @@ set -euo pipefail
 
 ORCHESTRATOR_URL="${ORCHESTRATOR_URL:-http://localhost:8081}"
 SANDBOX_IMAGE="${SANDBOX_IMAGE:-ubuntu:24.04}"
-USER_ID="${USER_ID:-$(uuidgen 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())')}"
+# Accept user_id as first argument, fall back to env var, then random UUID.
+USER_ID="${1:-${USER_ID:-$(uuidgen 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())')}}"
 AUTO_DESTROY="${AUTO_DESTROY:-0}"
+DAYTONA_API_KEY="${DAYTONA_API_KEY:-}"
+DAYTONA_TOOLBOX_URL="${DAYTONA_TOOLBOX_URL:-https://proxy.app.daytona.io/toolbox}"
 
 echo "[sandbox-shell] ORCHESTRATOR_URL=${ORCHESTRATOR_URL}"
 echo "[sandbox-shell] SANDBOX_IMAGE=${SANDBOX_IMAGE}"
 echo "[sandbox-shell] USER_ID=${USER_ID}"
 
-# 1) Provision sandbox via Go orchestrator HTTP API.
+# 1) Resume or provision sandbox via Go orchestrator HTTP API.
 RESPONSE=$(curl -sS -X POST "${ORCHESTRATOR_URL}/sandboxes" \
   -H "Content-Type: application/json" \
-  -d "{\"user_id\":\"${USER_ID}\",\"image\":\"${SANDBOX_IMAGE}\"}")
+  -d "{\"user_id\":\"${USER_ID}\"}")
 
 echo "[sandbox-shell] orchestrator response: ${RESPONSE}"
 SANDBOX_ID=$(echo "${RESPONSE}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])' 2>/dev/null \
@@ -42,14 +45,27 @@ if [[ -z "${SANDBOX_ID}" ]]; then
 fi
 echo "[sandbox-shell] sandbox.id=${SANDBOX_ID}"
 
-# 2) Open interactive shell via daytona CLI.
+# 2) Open interactive shell.
 echo "[sandbox-shell] entering ${SANDBOX_ID} — type 'exit' to leave"
 if command -v daytona >/dev/null 2>&1; then
   daytona sandboxes exec "${SANDBOX_ID}" -- /bin/bash -i || true
+elif [[ -n "${DAYTONA_API_KEY}" ]]; then
+  # No daytona CLI — use a read-eval loop via the toolbox process/execute API.
+  echo "[sandbox-shell] daytona CLI not found; using toolbox HTTP API (non-interactive)."
+  echo "[sandbox-shell] Type commands, empty line to quit."
+  while IFS= read -r -p "sandbox> " CMD; do
+    [[ -z "${CMD}" ]] && break
+    curl -sS -X POST \
+      -H "Authorization: Bearer ${DAYTONA_API_KEY}" \
+      -H "Content-Type: application/json" \
+      -d "{\"command\":$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "${CMD}"),\"timeout\":30}" \
+      "${DAYTONA_TOOLBOX_URL}/${SANDBOX_ID}/process/execute" \
+      | python3 -c "import json,sys; r=json.load(sys.stdin); print(r.get('result',''))" 2>/dev/null
+  done
 else
-  echo "[sandbox-shell] WARN: 'daytona' CLI not found on PATH."
-  echo "[sandbox-shell] exec into sandbox manually with:"
-  echo "    daytona sandboxes exec ${SANDBOX_ID} -- /bin/bash"
+  echo "[sandbox-shell] WARN: neither 'daytona' CLI nor DAYTONA_API_KEY is available."
+  echo "[sandbox-shell] To exec into the sandbox manually:"
+  echo "    DAYTONA_API_KEY=<key> bash scripts/sandbox-shell.sh ${USER_ID}"
 fi
 
 # 3) Optional teardown.
