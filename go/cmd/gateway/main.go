@@ -28,7 +28,13 @@ import (
 	"github.com/openclaw/agent-platform/adapters/telegram"
 	"github.com/openclaw/agent-platform/internal/gateway"
 	"github.com/openclaw/agent-platform/internal/gateway/routes"
+	"github.com/openclaw/agent-platform/internal/persistence"
+	"github.com/openclaw/agent-platform/internal/persistence/repos"
 )
+
+// Ensure pg_repos.go types are used (avoids unused import errors in main.go
+// when all adapter calls live in that file).
+var _ = (*pgChannelsRepo)(nil)
 
 func main() {
 	if err := run(); err != nil {
@@ -70,11 +76,40 @@ func run() error {
 		}
 	}
 
+	// Wire Postgres repos when DB_ENCRYPTION_KEY + POSTGRES_DSN are set (F12).
+	var channelsRepo gateway.ChannelsRepo
+	var agentsRepo gateway.AgentsRepo
+	var usersRepo gateway.UsersRepo
+	if pCfg, pErr := persistence.NewFromEnv(); pErr == nil {
+		poolCtx, poolCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer poolCancel()
+		pool, poolErr := persistence.NewPool(poolCtx, pCfg.DSN, persistence.DefaultPoolOptions())
+		if poolErr != nil {
+			log.Printf("WARNING: postgres pool failed (%v) — using in-memory repos", poolErr)
+		} else {
+			cr, crErr := repos.NewChannelsRepo(pool, &pCfg)
+			if crErr != nil {
+				log.Printf("WARNING: channels repo init failed (%v) — using in-memory", crErr)
+			} else {
+				channelsRepo = &pgChannelsRepo{r: cr}
+				agentsRepo = &pgAgentsRepo{r: repos.NewAgentsRepo(pool)}
+				usersRepo = &pgUsersRepo{r: repos.NewUsersRepo(pool)}
+				dsn := pCfg.DSN
+				if len(dsn) > 30 {
+					dsn = dsn[:30]
+				}
+				log.Printf("postgres repos wired (dsn prefix: %s...)", dsn)
+			}
+		}
+	} else {
+		log.Printf("WARNING: DB_ENCRYPTION_KEY not set — using in-memory repos (%v)", pErr)
+	}
+
 	app, err := gateway.NewApp(
 		cfg, rdb,
-		nil, // channels repo (in-memory default; F12 swap point)
-		nil, // users repo
-		nil, // agents repo
+		channelsRepo, // nil → in-memory fallback
+		usersRepo,
+		agentsRepo,
 		nil, // orchestrator (HTTP client at cfg.OrchestratorURL)
 		nil, // db health (always-healthy default)
 		nil, // channel registry (process-wide default)

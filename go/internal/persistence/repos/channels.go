@@ -68,7 +68,8 @@ func (r *ChannelsRepo) Register(
         INSERT INTO channels (user_id, type, ext_id, config_encrypted, agent_id)
         VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (type, ext_id) DO UPDATE
-            SET config_encrypted = EXCLUDED.config_encrypted,
+            SET user_id = EXCLUDED.user_id,
+                config_encrypted = EXCLUDED.config_encrypted,
                 agent_id = EXCLUDED.agent_id
         RETURNING id, user_id, agent_id`,
 		uID, channelType, extID, configEncrypted, aID,
